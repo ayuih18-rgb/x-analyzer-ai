@@ -16,6 +16,7 @@ def extract_username(url):
 # =========================
 def word_frequency(tweets):
     words = []
+
     for t in tweets:
         clean = re.sub(r"[^\w\s]", "", t)
         words.extend(clean.lower().split())
@@ -25,16 +26,208 @@ def word_frequency(tweets):
     filtered = [w for w in words if w not in stopwords and len(w) > 2]
 
     freq = {}
+
     for w in filtered:
         freq[w] = freq.get(w, 0) + 1
 
     return sorted(freq.items(), key=lambda x: x[1], reverse=True)[:5]
 
 # =========================
-# التحليل الأساسي
+# تحليل حساب واحد
 # =========================
 def analyze(username, tweets_text):
 
+    tweets = [t.strip() for t in tweets_text.split("\n") if t.strip()]
+    count = len(tweets)
+
+    if count == 0:
+        return {
+            "username": username,
+            "score": 0,
+            "status": "لا بيانات",
+            "risk": "غير معروف",
+            "issues": ["لا توجد تغريدات"],
+            "fixes": ["أضف تغريدات"],
+            "top_words": []
+        }
+
+    score = 100
+    issues = []
+    fixes = []
+
+    avg_len = sum(len(t) for t in tweets) / count
+    hashtags = sum(1 for t in tweets if "#" in t)
+    questions = sum(1 for t in tweets if "?" in t)
+
+    # ===== تحليل =====
+    if avg_len < 40:
+        score -= 20
+        issues.append("المحتوى قصير")
+        fixes.append("اكتب محتوى أطول")
+
+    if hashtags == 0:
+        score -= 10
+        issues.append("لا يستخدم هاشتاغات")
+        fixes.append("أضف هاشتاغات")
+
+    if questions == 0:
+        score -= 10
+        issues.append("لا يوجد تفاعل")
+        fixes.append("استخدم أسئلة")
+
+    if count < 5:
+        score -= 15
+        issues.append("نشاط ضعيف")
+        fixes.append("انشر باستمرار")
+
+    # ===== الحالة =====
+    if score >= 80:
+        status = "🟢 قوي"
+        risk = "منخفض"
+    elif score >= 60:
+        status = "🟡 متوسط"
+        risk = "متوسط"
+    else:
+        status = "🔴 ضعيف"
+        risk = "مرتفع"
+
+    return {
+        "username": username,
+        "score": max(0, score),
+        "status": status,
+        "risk": risk,
+        "issues": issues,
+        "fixes": fixes,
+        "top_words": word_frequency(tweets)
+    }
+
+# =========================
+# مقارنة حسابات (خفيفة)
+# =========================
+def compare(accounts):
+
+    sorted_acc = sorted(accounts, key=lambda x: x["score"], reverse=True)
+
+    return {
+        "winner": sorted_acc[0]["username"],
+        "ranking": sorted_acc
+    }
+
+# =========================
+# UI (خفيف جدًا)
+# =========================
+HTML = """
+<div style="max-width:800px;margin:auto;font-family:Arial;background:#0f172a;color:white;padding:20px;border-radius:10px">
+
+<h2>🧠 AI X Analyzer (Light Flask)</h2>
+
+<!-- تحليل حساب -->
+<form method="post">
+<input name="url" placeholder="رابط الحساب" style="width:100%;padding:10px"><br><br>
+<textarea name="tweets" placeholder="التغريدات" rows="6" style="width:100%"></textarea><br><br>
+<button style="padding:10px;background:#3b82f6;color:white;border:none">تحليل</button>
+</form>
+
+<hr>
+
+<!-- مقارنة -->
+<form method="post">
+<textarea name="compare" placeholder="كل حساب في سطر" rows="5" style="width:100%"></textarea><br><br>
+<button style="padding:10px;background:#10b981;color:white;border:none">مقارنة</button>
+</form>
+
+{% if data %}
+
+<hr>
+<h3>👤 {{data.username}}</h3>
+<p>📊 {{data.score}}</p>
+<p>📌 {{data.status}}</p>
+<p>📡 {{data.risk}}</p>
+
+<h4>⚠️ مشاكل</h4>
+{% for i in data.issues %}
+<p>- {{i}}</p>
+{% endfor %}
+
+<h4>💡 حلول</h4>
+{% for f in data.fixes %}
+<p>- {{f}}</p>
+{% endfor %}
+
+<h4>🔥 كلمات</h4>
+{% for w,c in data.top_words %}
+<p>{{w}} → {{c}}</p>
+{% endfor %}
+
+{% endif %}
+
+{% if compare %}
+
+<hr>
+<h3>🏆 الفائز: {{compare.winner}}</h3>
+
+{% for acc in compare.ranking %}
+<div style="background:#1f2937;padding:10px;margin:10px;border-radius:8px">
+<p>👤 {{acc.username}}</p>
+<p>📊 {{acc.score}}</p>
+</div>
+{% endfor %}
+
+{% endif %}
+
+</div>
+"""
+
+# =========================
+# Flask App
+# =========================
+@app.route("/", methods=["GET", "POST"])
+def home():
+
+    data = None
+    compare_result = None
+
+    if request.method == "POST":
+
+        # تحليل
+        if request.form.get("url"):
+
+            username = extract_username(request.form["url"])
+            tweets = request.form.get("tweets", "")
+
+            data = analyze(username, tweets)
+
+        # مقارنة
+        if request.form.get("compare"):
+
+            urls = request.form["compare"].split("\n")
+
+            accounts = []
+
+            for u in urls:
+                if not u.strip():
+                    continue
+
+                username = extract_username(u)
+
+                # تحليل بسيط (بدون tweets)
+                res = analyze(username, "")
+
+                accounts.append({
+                    "username": username,
+                    "score": res["score"]
+                })
+
+            compare_result = compare(accounts)
+
+    return render_template_string(HTML, data=data, compare=compare_result)
+
+# =========================
+# تشغيل Flask (Render)
+# =========================
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
     tweets = [t.strip() for t in tweets_text.split("\n") if t.strip()]
     count = len(tweets)
 
