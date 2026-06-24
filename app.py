@@ -1,39 +1,86 @@
 from flask import Flask, request, render_template_string
 import re
+import os
 
 app = Flask(__name__)
 
 # =========================
-# استخراج اسم الحساب
+# الدوال المساعدة
 # =========================
 def extract_username(url):
     match = re.search(r"x\.com/([A-Za-z0-9_]+)", url)
     return match.group(1) if match else url.strip()
 
-# =========================
-# تحليل الكلمات الأكثر تكرارًا
-# =========================
 def word_frequency(tweets):
     words = []
-
     for t in tweets:
         clean = re.sub(r"[^\w\s]", "", t)
         words.extend(clean.lower().split())
-
-    stopwords = {
-        "في","من","على","الى","عن","و","a","an","the","is","are","to"
-    }
-
+    stopwords = {"في","من","على","الى","عن","و","a","an","the","is","are","to"}
     filtered = [w for w in words if w not in stopwords and len(w) > 2]
-
     freq = {}
-
     for w in filtered:
         freq[w] = freq.get(w, 0) + 1
+    return sorted(freq.items(), key=lambda x: x[1], reverse=True)[:6]
 
-    top_words = sorted(freq.items(), key=lambda x: x[1], reverse=True)[:6]
+# =========================
+# التحليل الذكي
+# =========================
+def analyze(username, tweets_text):
+    tweets = [t.strip() for t in tweets_text.split("\n") if t.strip()]
+    count = len(tweets)
+    
+    if count == 0:
+        return {"username": username, "score": 0, "status": "لا بيانات", "risk": "غير معروف", "issues": ["لا توجد تغريدات"], "fixes": [], "top_words": []}
 
-    return top_words
+    score = 85
+    issues = []
+    fixes = []
+    avg_len = sum(len(t) for t in tweets) / count
+    
+    if avg_len < 40: score -= 15; issues.append("محتوى قصير"); fixes.append("اكتب أكثر")
+    
+    risk = "منخفض 🟢"
+    status = "🟢 قوي" if score >= 80 else "🟡 متوسط"
+    
+    return {
+        "username": username,
+        "score": score,
+        "status": status,
+        "risk": risk,
+        "issues": issues,
+        "fixes": fixes,
+        "top_words": word_frequency(tweets)
+    }
+
+# =========================
+# واجهة الويب
+# =========================
+HTML = """
+<div style="background:#111827; color:white; padding:20px; border-radius:15px; text-align:center;">
+<h2>🧠 AI X Analyzer</h2>
+<form method="post">
+<input name="url" placeholder="رابط الحساب"><br>
+<textarea name="tweets" rows="5" placeholder="التغريدات هنا"></textarea><br>
+<button type="submit">تحليل</button>
+</form>
+{% if data %}
+<p>التقييم: {{data.score}}</p>
+<p>الحالة: {{data.status}}</p>
+{% endif %}
+</div>
+"""
+
+@app.route("/", methods=["GET", "POST"])
+def home():
+    data = None
+    if request.method == "POST":
+        data = analyze(extract_username(request.form["url"]), request.form["tweets"])
+    return render_template_string(HTML, data=data)
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
 
 # =========================
 # التحليل الذكي
