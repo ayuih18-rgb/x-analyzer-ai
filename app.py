@@ -1,96 +1,81 @@
-from flask import Flask, request, render_template_string
-import snscrape.modules.twitter as sntwitter
-from collections import Counter
-import datetime
+From flask import Flask, request, render_template_string
+from playwright.sync_api import sync_playwright
+import re
 
 app = Flask(__name__)
 
 # =========================
-# جلب التغريدات
+# جلب التغريدات من الصفحة مباشرة
 # =========================
-def get_tweets(user, limit=120):
+def scrape_tweets(url):
+
     tweets = []
 
-    for i, t in enumerate(sntwitter.TwitterUserScraper(user).get_items()):
-        if i >= limit:
-            break
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
 
-        tweets.append({
-            "text": t.content,
-            "likes": t.likeCount or 0,
-            "retweets": t.retweetCount or 0,
-            "date": t.date
-        })
+        page.goto(url, timeout=60000)
+        page.wait_for_timeout(5000)
+
+        content = page.content()
+
+        # استخراج نصوص تقريبية (بسيط لكن عملي)
+        texts = re.findall(r'"text":"(.*?)"', content)
+
+        for t in texts[:30]:
+            tweets.append(t)
+
+        browser.close()
 
     return tweets
 
 
 # =========================
-# تحليل احترافي
+# تحليل ذكي
 # =========================
-def analyze(tweets, competitor=None):
+def analyze(tweets):
 
     if not tweets:
         return None
 
     total = len(tweets)
 
-    likes = sum(t["likes"] for t in tweets)
-    retweets = sum(t["retweets"] for t in tweets)
+    lengths = [len(t) for t in tweets]
+    avg_len = sum(lengths) / total
 
-    avg_likes = likes / total
-    avg_retweets = retweets / total
+    short = sum(1 for t in tweets if len(t) < 40)
 
-    engagement = avg_likes + avg_retweets
+    score = 100
+    issues = []
+    fixes = []
 
-    # ======================
-    # تحليل الوقت
-    # ======================
-    hours = []
-    for t in tweets:
-        if t["date"]:
-            hours.append(t["date"].hour)
+    if avg_len < 50:
+        score -= 20
+        issues.append("المحتوى ضعيف أو قصير")
+        fixes.append("اكتب تغريدات أطول وأكثر شرحًا")
 
-    best_hour = Counter(hours).most_common(1)[0][0] if hours else None
+    if short > total * 0.5:
+        score -= 25
+        issues.append("أكثر من نصف المحتوى ضعيف جدًا")
+        fixes.append("ركز على محتوى قيم وليس قصير")
 
-    # ======================
-    # نقاط ضعف
-    # ======================
-    weaknesses = []
+    if total < 10:
+        score -= 15
+        issues.append("عدد التغريدات قليل")
 
-    if avg_likes < 5:
-        weaknesses.append("ضعف كبير في جذب التفاعل")
-
-    if avg_retweets < 1:
-        weaknesses.append("المحتوى غير قابل للنشر (share)")
-
-    if engagement < 10:
-        weaknesses.append("ضعف عام في الوصول")
-
-    # ======================
-    # أفضل تغريدة
-    # ======================
-    best = max(tweets, key=lambda x: x["likes"])
-
-    # ======================
-    # مقارنة منافس
-    # ======================
-    comparison = None
-    if competitor:
-        comp_tweets = get_tweets(competitor, 50)
-        if comp_tweets:
-            comp_avg = sum(t["likes"] for t in comp_tweets) / len(comp_tweets)
-            comparison = round((avg_likes / comp_avg) * 100, 2) if comp_avg else None
+    # مؤشر ضعف الانتشار
+    risk = "منخفض 🟢"
+    if score < 60:
+        risk = "مرتفع ⚠️"
 
     return {
         "total": total,
-        "avg_likes": round(avg_likes, 2),
-        "avg_retweets": round(avg_retweets, 2),
-        "engagement": round(engagement, 2),
-        "best_hour": best_hour,
-        "weaknesses": weaknesses,
-        "best": best,
-        "comparison": comparison
+        "score": max(0, score),
+        "risk": risk,
+        "issues": issues,
+        "fixes": fixes,
+        "sample": tweets[:3]
     }
 
 
@@ -98,40 +83,41 @@ def analyze(tweets, competitor=None):
 # واجهة
 # =========================
 HTML = """
-<h2>📊 Pro X Analyzer AI</h2>
+<h2>🧠 AI X Live Analyzer (Browser Mode)</h2>
 
 <form method="post">
-<input name="user" placeholder="الحساب الأساسي">
-<br><br>
-<input name="comp" placeholder="حساب منافس (اختياري)">
-<br><br>
-<button>تحليل</button>
+<input name="url" placeholder="https://x.com/username"><br><br>
+<button>تحليل مباشر</button>
 </form>
 
 {% if data %}
 
 <hr>
 
-<h3>📊 النتائج</h3>
-<p>عدد التغريدات: {{data.total}}</p>
-<p>متوسط الإعجابات: {{data.avg_likes}}</p>
-<p>متوسط الريتويت: {{data.avg_retweets}}</p>
+<p>📊 عدد التغريدات: {{data.total}}</p>
+<p>📈 التقييم: {{data.score}} / 100</p>
+<p>⚠️ مستوى الخطر: {{data.risk}}</p>
 
-<h3>🧠 نقاط الضعف</h3>
+<h3>⚠️ المشاكل</h3>
 <ul>
-{% for w in data.weaknesses %}
-<li>⚠️ {{w}}</li>
+{% for i in data.issues %}
+<li>{{i}}</li>
 {% endfor %}
 </ul>
 
-<h3>⏰ أفضل وقت للنشر</h3>
-<p>{{data.best_hour}}:00</p>
+<h3>💡 الحلول</h3>
+<ul>
+{% for f in data.fixes %}
+<li>{{f}}</li>
+{% endfor %}
+</ul>
 
-<h3>⭐ أفضل تغريدة</h3>
-<p>{{data.best.text}}</p>
-
-<h3>📈 مقارنة المنافس</h3>
-<p>{{data.comparison}} % مقارنة بالمنافس</p>
+<h3>🧾 أمثلة من التغريدات</h3>
+<ul>
+{% for s in data.sample %}
+<li>{{s}}</li>
+{% endfor %}
+</ul>
 
 {% endif %}
 """
@@ -143,11 +129,9 @@ def home():
     data = None
 
     if request.method == "POST":
-        user = request.form["user"].split("/")[-1]
-        comp = request.form.get("comp")
-
-        tweets = get_tweets(user)
-        data = analyze(tweets, comp)
+        url = request.form["url"]
+        tweets = scrape_tweets(url)
+        data = analyze(tweets)
 
     return render_template_string(HTML, data=data)
 
